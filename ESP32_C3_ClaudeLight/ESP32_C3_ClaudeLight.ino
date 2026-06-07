@@ -4,15 +4,15 @@
 #include <BLE2902.h>
 
 // =====================================================
-// ESP32-C3 SuperMini + ClaudeLight: BLE 蓝牙控制版
+// ESP-32E + ClaudeLight: BLE 蓝牙控制版
 //
-// 接线方式：
-// ESP32 3.3V  -> 灯板 + / 电池正极
-// ESP32 IO2   -> 220Ω -> L1 控制点 = 绿灯
-// ESP32 IO3   -> 220Ω -> L2 控制点 = 黄灯
-// ESP32 IO4   -> 220Ω -> L3 控制点 = 红灯
+// 接线方式（共阴模块 G Y R GND）：
+// ESP32 GND   -> 模块 GND
+// ESP32 IO25  -> 220Ω -> 模块 G = 绿灯
+// ESP32 IO26  -> 220Ω -> 模块 Y = 黄灯
+// ESP32 IO27  -> 220Ω -> 模块 R = 红灯
 //
-// 公共正极：GPIO LOW = 灯亮，GPIO HIGH = 灯灭。
+// 共阴模块：GPIO HIGH = 灯亮，GPIO LOW = 灯灭。
 // 默认开机模式：demo
 // =====================================================
 
@@ -21,9 +21,9 @@ const char* BLE_DEVICE_NAME = "ClaudeLight";
 #define SERVICE_UUID        "b8b7e001-7a6b-4f4f-9a8b-11c0ffee0001"
 #define MODE_CHAR_UUID      "b8b7e002-7a6b-4f4f-9a8b-11c0ffee0001"
 
-const int GREEN_PIN = 2;
-const int YELLOW_PIN = 3;
-const int RED_PIN = 4;
+const int GREEN_PIN = 25;
+const int YELLOW_PIN = 26;
+const int RED_PIN = 27;
 
 const int PWM_FREQ = 5000;
 const int PWM_RESOLUTION = 8;
@@ -48,8 +48,7 @@ bool deviceConnected = false;
 
 void writeLed(int pin, int value) {
   value = constrain(value, 0, 255);
-  int pwmValue = 255 - value;
-  ledcWrite(pin, pwmValue);
+  ledcWrite(pin, value);  // 共阴模块：直接输出，无需反转
 }
 
 void allOff() {
