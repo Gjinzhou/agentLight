@@ -2,24 +2,24 @@
 
 [English](#claudelight-english)
 
-一个基于 **ESP32-C3 SuperMini + BLE 蓝牙** 的桌面状态灯项目，用红绿灯挂件直观显示 Claude Code Agent 的工作状态。
+一个基于 **ESP-32E + 共阴红绿灯模块 + BLE 蓝牙** 的桌面状态灯项目，用红绿灯模块直观显示 Claude Code Agent 的工作状态。
 
-> A BLE-powered status light for Claude Code Agent, using ESP32-C3 to visualize AI coding states.
+> A BLE-powered status light for Claude Code Agent, using ESP-32E with a common-cathode traffic-light module to visualize AI coding states.
 
 ---
 
 ## 1. 项目简介
 
-ClaudeLight 将一个普通的红绿灯挂件改造成可由电脑控制的桌面状态灯。
+ClaudeLight 将一个共阴红绿灯模块改造成可由电脑控制的桌面状态灯。
 
 核心思路：
 
-- 使用 **ESP32-C3 SuperMini** 作为主控。
-- 复用红绿灯挂件内部原有三色灯板。
+- 使用 **ESP-32E 开发板** 作为主控。
+- 使用 **共阴红绿灯模块**（丝印 G/Y/R/GND）。
 - 通过 **BLE 蓝牙** 接收电脑端脚本发送的状态指令。
 - 结合 Claude Code Hooks，让 Agent 的工作状态自动映射到灯效。
 
-本项目不依赖 Wi-Fi，电脑可以继续连接 5GHz 网络。ESP32-C3 只负责 BLE 通信和灯效控制。
+本项目不依赖 Wi-Fi，电脑可以继续连接 5GHz 网络。ESP-32E 只负责 BLE 通信和灯效控制。
 
 ---
 
@@ -45,54 +45,53 @@ ClaudeLight 将一个普通的红绿灯挂件改造成可由电脑控制的桌�
 
 | 类别 | 物料 | 数量 | 说明 |
 |---|---|---:|---|
-| 主体 | 红绿灯挂件 / 玩具交通信号灯模型 | 1 个 | 淘宝 / 1688 搜"红绿灯挂件""交通信号灯挂件" |
-| 主控 | ESP32-C3 SuperMini 开发板 | 1 块 | 建议购买已焊针版本，USB-C 更方便 |
+| 主体 | 共阴红绿灯模块 (丝印 G/Y/R/GND) | 1 个 | 淘宝搜"红绿灯模块""交通灯模块" |
+| 主控 | ESP-32E 开发板 | 1 块 | USB-C 接口，建议购买已焊针版本 |
 | 限流 | 220Ω 1/4w 电阻 | 3 只 | 建议买 10 只装备用 |
 | 连线 | 细导线 / 飞线 | 若干 | 推荐 30AWG 硅胶线或漆包线 |
 | 供电 | USB-C 数据线 | 1 条 | 必须支持数据传输 |
 | 绝缘 | 热缩管 / 绝缘胶带 | 少量 | 用于保护焊点 |
 | 工具 | 电烙铁、焊锡丝、镊子、剪线钳 | 若干 | 需要基础焊接工具 |
 | 检测 | 万用表 | 可选 | 推荐用于确认焊点和短路 |
+| 外壳 | 3D 打印外壳 | 1 套 | 见第 15 节
 
 说明：
 
-- 本方案复用原玩具灯板，不需要额外购买红、黄、绿三颗 LED。
-- 改装后建议使用 USB 供电，不建议继续使用纽扣电池。
-- 每路灯建议串联 220Ω 电阻，用于保护 ESP32-C3 和原灯板。
+- 本方案使用共阴红绿灯模块（丝印 G/Y/R/GND），GPIO HIGH 点亮、LOW 熄灭。
+- 每路灯建议串联 220Ω 电阻，用于保护 ESP-32E 和 LED 模块。
+- 改装后使用 USB 供电。
 
 ---
 
 ## 4. 硬件接线
 
-本项目当前适配的是 **公共正极灯板**。
+本项目适配的是 **共阴红绿灯模块**（丝印 G/Y/R/GND）。
 
-实测灯位：
+接线表：
 
-| 灯位 | 实际颜色 | ESP32 引脚 |
+| 灯位 | 模块丝印 | ESP32 引脚 |
 |---|---|---|
-| L1 | 绿灯 | IO2 |
-| L2 | 黄灯 | IO3 |
-| L3 | 红灯 | IO4 |
+| 绿灯 | G | IO25 |
+| 黄灯 | Y | IO26 |
+| 红灯 | R | IO27 |
 
 接线方式：
 
 ```text
-ESP32 3.3V  -> 原灯板 + / 原电池正极
-ESP32 IO2   -> 220Ω -> L1 控制点 = 绿灯
-ESP32 IO3   -> 220Ω -> L2 控制点 = 黄灯
-ESP32 IO4   -> 220Ω -> L3 控制点 = 红灯
-
-原灯板 - / 原电池负极：第一版先不要接
+ESP32 GND   -> 模块 GND
+ESP32 IO25  -> 220Ω -> 模块 G = 绿灯
+ESP32 IO26  -> 220Ω -> 模块 Y = 黄灯
+ESP32 IO27  -> 220Ω -> 模块 R = 红灯
 ```
 
-公共正极逻辑：
+共阴模块逻辑：
 
 ```text
-GPIO LOW  = 灯亮
-GPIO HIGH = 灯灭
+GPIO HIGH = 灯亮
+GPIO LOW  = 灯灭
 ```
 
-固件中已经处理了反相输出，正常使用时不需要手动关心高低电平。
+固件中已直接输出 PWM 值（共阴无需反转），正常使用时不需要手动关心高低电平。
 
 ---
 
@@ -141,12 +140,27 @@ https://www.arduino.cc/en/software
 3. 安装 **esp32 by Espressif Systems**。
 4. 安装完成后重启 Arduino IDE。
 
-### 6.3 选择开发板和端口
+#### 中国地区加速
 
-连接 ESP32-C3 SuperMini 后，在 Arduino IDE 中选择：
+如果下载缓慢，可使用国内镜像源：
+
+1. 打开 Arduino IDE → **文件** → **首选项** (macOS: **Arduino IDE** → **Preferences**)。
+2. 在 **附加开发板管理器网址** 中添加以下地址：
 
 ```text
-Board: ESP32C3 Dev Module
+https://github.com/espressif/arduino-esp32/releases/download/package_esp32_index_cn.json
+```
+
+3. 点击确定后，重新在 Boards Manager 中搜索并安装 `esp32`。
+
+> 也可访问 https://github.com/espressif/arduino-esp32/releases 查看最新索引地址。
+
+### 6.3 选择开发板和端口
+
+连接 ESP-32E 开发板后，在 Arduino IDE 中选择：
+
+```text
+Board: ESP32 Dev Module
 Port: 选择带 USB 标识的串口
 ```
 
@@ -178,40 +192,49 @@ Port: 选择带 USB 标识的串口
 
 ```powershell
 # 运行安装脚本
-.\scripts\install.ps1
+.\scripts_node\install.ps1
 ```
 
 ### macOS / Linux
 
 ```bash
 # 运行安装脚本
-chmod +x scripts/install.sh
-./scripts/install.sh
+chmod +x scripts_node/install.sh
+./scripts_node/install.sh
 ```
 
 ### 手动安装
 
-1. 安装 Python 依赖：
+1. 安装 Node.js 18+ 和 npm。
+
+2. 安装依赖：
 
 ```bash
-pip install bleak
+cd scripts_node
+npm install
 ```
 
-2. 复制脚本到 Claude Code 配置目录：
+3. 复制脚本到 Claude Code 配置目录：
 
 ```bash
 # Windows
 mkdir %USERPROFILE%\.claude\claude-light
-copy scripts\*.py %USERPROFILE%\.claude\claude-light\
+copy scripts_node\package.json %USERPROFILE%\.claude\claude-light\
+copy scripts_node\claude_light_ble.js %USERPROFILE%\.claude\claude-light\
+copy scripts_node\claude_light_hook.js %USERPROFILE%\.claude\claude-light\
 
 # macOS/Linux
 mkdir -p ~/.claude/claude-light
-cp scripts/*.py ~/.claude/claude-light/
+cp scripts_node/package.json ~/.claude/claude-light/
+cp scripts_node/claude_light_ble.js ~/.claude/claude-light/
+cp scripts_node/claude_light_hook.js ~/.claude/claude-light/
 ```
 
-3. 配置 Claude Code hooks：
+4. 在安装目录运行 `npm install --production` 安装依赖。
 
-将 `scripts/settings.json.snippet` 的内容合并到 `~/.claude/settings.json`。
+5. 配置 Claude Code hooks：
+
+将 `scripts_node/settings.json.snippet` 的内容合并到 `~/.claude/settings.json`。
 
 ---
 
@@ -221,16 +244,23 @@ cp scripts/*.py ~/.claude/claude-light/
 
 ```bash
 # Windows
-py ~/.claude/claude-light/claude_light_ble.py demo
-py ~/.claude/claude-light/claude_light_ble.py thinking
-py ~/.claude/claude-light/claude_light_ble.py success
-py ~/.claude/claude-light/claude_light_ble.py error
-py ~/.claude/claude-light/claude_light_ble.py alarm
+node ~/.claude/claude-light/claude_light_ble.js demo
+node ~/.claude/claude-light/claude_light_ble.js thinking
+node ~/.claude/claude-light/claude_light_ble.js success
+node ~/.claude/claude-light/claude_light_ble.js error
+node ~/.claude/claude-light/claude_light_ble.js alarm
 
 # macOS/Linux
-python3 ~/.claude/claude-light/claude_light_ble.py demo
-python3 ~/.claude/claude-light/claude_light_ble.py thinking
-python3 ~/.claude/claude-light/claude_light_ble.py success
+node ~/.claude/claude-light/claude_light_ble.js demo
+node ~/.claude/claude-light/claude_light_ble.js thinking
+node ~/.claude/claude-light/claude_light_ble.js success
+```
+
+BLE 诊断：
+
+```bash
+# 扫描附近所有 BLE 设备 (用于排查找不到设备的问题)
+node ~/.claude/claude-light/claude_light_ble.js --scan
 ```
 
 ---
@@ -323,16 +353,16 @@ tail -f ~/.claude/claude-light/claude_light.log
 
 | 现象 | 优先检查 |
 |---|---|
-| 找不到设备 | ESP32-C3 是否供电、BLE 广播名是否为 ClaudeLight、距离是否过远、系统蓝牙是否开启 |
+| 找不到设备 | ESP-32E 是否供电、BLE 广播名是否为 ClaudeLight、距离是否过远、系统蓝牙是否开启；尝试 `--scan` 诊断 |
 | 写入失败 | GATT UUID 是否一致 |
 | Claude Code 没有触发 | settings.json 是否正确配置，是否重启 Claude Code |
-| 灯色不对应 | 确认 IO2=L1 绿，IO3=L2 黄，IO4=L3 红 |
+| 灯色不对应 | 确认 IO25=G 绿，IO26=Y 黄，IO27=R 红 |
 
 ---
 
 ## 13. 常见问题
 
-### Arduino IDE 搜不到 ESP32C3 Dev Module
+### Arduino IDE 搜不到 ESP32 Dev Module
 
 确认已安装：
 
@@ -356,10 +386,11 @@ esp32 by Espressif Systems
 
 检查：
 
-- ESP32-C3 是否已通电。
+- ESP-32E 是否已通电。
 - 固件是否已成功运行。
 - BLE 名称是否为 `ClaudeLight`。
 - 电脑蓝牙是否打开。
+- 运行 `--scan` 诊断命令查看附近所有 BLE 设备及匹配状态。
 
 ### Windows 蓝牙权限问题
 
@@ -389,7 +420,42 @@ rm -rf ~/.claude/claude-light
 
 ---
 
-## 15. 参考链接
+## 15. 3D 打印外壳
+
+项目提供了一个 OpenSCAD 参数化外壳模型，可将 ESP-32E 开发板和红绿灯模块组装在一起。
+
+文件位置：
+
+```text
+enclosure/claude_light_case.scad
+```
+
+外壳为两件式设计：
+
+| 部件 | 说明 |
+|---|---|
+| 底托 (tray) | 容纳 ESP-32E 开发板，四角贴墙 1/4 圆柱支撑 PCB，USB-C 侧面开口 |
+| 顶板 (cap) | 实心平板，中央插槽夹持红绿灯模块，弹片卡扣固定 |
+
+使用方法：
+
+1. 用 OpenSCAD 打开 `claude_light_case.scad`。
+2. 修改 `PART` 变量切换渲染部件：`"tray"` / `"cap"` / `"exploded"` / `"all"`。
+3. 分别导出 STL 文件后 3D 打印。
+4. 将 ESP-32E 放入底托，红绿灯模块插入顶板插槽，顶板盖在底托上即可。
+
+关键参数（在文件顶部修改）：
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `WALL` | 1.2 | 壁厚 (mm) |
+| `TRAY_TARGET_H` | 30 | 底托目标高度 (mm) |
+| `SLOT_D` | 3.3 | 插槽缝隙宽度 (mm) |
+| `CORNER_PAD_R` | 2 | 四角支撑圆柱半径 (mm) |
+
+---
+
+## 16. 参考链接
 
 - Arduino IDE 下载页：`https://www.arduino.cc/en/software`
 - Arduino-ESP32 安装文档：`https://docs.espressif.com/projects/arduino-esp32/en/latest/installing.html`
@@ -402,20 +468,20 @@ rm -rf ~/.claude/claude-light
 
 [中文](#claudelight)
 
-A desktop status light project based on **ESP32-C3 SuperMini + BLE Bluetooth**. It turns a toy traffic-light ornament into a visual indicator for Claude Code Agent states.
+A desktop status light project based on **ESP-32E + Common-Cathode Traffic-Light Module + BLE Bluetooth**. It uses a traffic-light module to visually indicate Claude Code Agent states.
 
-> A BLE-powered status light for Claude Code Agent, using ESP32-C3 to visualize AI coding states.
+> A BLE-powered status light for Claude Code Agent, using ESP-32E with a common-cathode traffic-light module to visualize AI coding states.
 
 ---
 
 ## 1. Project Overview
 
-ClaudeLight repurposes an ordinary traffic-light desk ornament into a computer-controlled status lamp.
+ClaudeLight uses a common-cathode traffic-light module (silkscreen: G/Y/R/GND) as a computer-controlled status lamp.
 
 Core ideas:
 
-- Use **ESP32-C3 SuperMini** as the main controller.
-- Reuse the original three-color lamp board inside the ornament.
+- Use **ESP-32E dev board** as the main controller.
+- Use a **common-cathode traffic-light module** (silkscreen: G/Y/R/GND).
 - Receive status commands from a host script over **BLE Bluetooth**.
 - Integrate with Claude Code Hooks so Agent activity maps automatically to light patterns.
 
@@ -441,28 +507,38 @@ Core ideas:
 
 | Category | Item | Qty | Notes |
 |---|---|---:|---|
-| Body | Traffic-light ornament | 1 | Search Taobao for "traffic light ornament" |
-| MCU | ESP32-C3 SuperMini dev board | 1 | Pre-soldered headers recommended |
+| Body | Common-cathode traffic-light module (G/Y/R/GND) | 1 | Search Taobao for "traffic light module" |
+| MCU | ESP-32E dev board | 1 | USB-C, pre-soldered headers recommended |
 | Current limit | 220Ω resistors | 3 | Buy ~10 for spares |
 | Wire | Thin wire / jumper wire | some | 30 AWG silicone recommended |
 | Power | USB-C data cable | 1 | Must support data |
 | Tools | Soldering iron, solder, tweezers | — | Basic soldering kit |
+| Enclosure | 3D printed case | 1 set | See 3D Enclosure section
 
 ---
 
 ## 4. Wiring
 
-| Position | Color | ESP32 pin |
+This project uses a **common-cathode traffic-light module** (silkscreen: G/Y/R/GND).
+
+| Silkscreen | Color | ESP32 pin |
 |---|---|---|
-| L1 | Green | IO2 |
-| L2 | Yellow | IO3 |
-| L3 | Red | IO4 |
+| G | Green | IO25 |
+| Y | Yellow | IO26 |
+| R | Red | IO27 |
 
 ```text
-ESP32 3.3V  -> board + / original battery +
-ESP32 IO2   -> 220Ω -> L1 control = green
-ESP32 IO3   -> 220Ω -> L2 control = yellow
-ESP32 IO4   -> 220Ω -> L3 control = red
+ESP32 GND   -> Module GND
+ESP32 IO25  -> 220Ω -> Module G = green
+ESP32 IO26  -> 220Ω -> Module Y = yellow
+ESP32 IO27  -> 220Ω -> Module R = red
+```
+
+Common-cathode logic:
+
+```text
+GPIO HIGH = LED on
+GPIO LOW  = LED off
 ```
 
 ---
@@ -472,21 +548,23 @@ ESP32 IO4   -> 220Ω -> L3 control = red
 ### Windows
 
 ```powershell
-.\scripts\install.ps1
+.\scripts_node\install.ps1
 ```
 
 ### macOS / Linux
 
 ```bash
-chmod +x scripts/install.sh
-./scripts/install.sh
+chmod +x scripts_node/install.sh
+./scripts_node/install.sh
 ```
 
 ### Manual
 
 ```bash
-pip install bleak
-# Copy scripts to ~/.claude/claude-light/
+# Install Node.js 18+, then:
+cd scripts_node
+npm install
+# Copy files to ~/.claude/claude-light/
 # Merge settings.json.snippet into ~/.claude/settings.json
 ```
 
@@ -495,9 +573,12 @@ pip install bleak
 ## 6. Manual Test
 
 ```bash
-python3 ~/.claude/claude-light/claude_light_ble.py demo
-python3 ~/.claude/claude-light/claude_light_ble.py thinking
-python3 ~/.claude/claude-light/claude_light_ble.py success
+node ~/.claude/claude-light/claude_light_ble.js demo
+node ~/.claude/claude-light/claude_light_ble.js thinking
+node ~/.claude/claude-light/claude_light_ble.js success
+
+# BLE diagnostic scan
+node ~/.claude/claude-light/claude_light_ble.js --scan
 ```
 
 ---

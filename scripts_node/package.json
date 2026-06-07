@@ -1,0 +1,12 @@
+{
+  "name": "claudelight-ble",
+  "version": "1.0.0",
+  "description": "ClaudeLight BLE 控制脚本 (Node.js 版)",
+  "scripts": {
+    "ble": "node claude_light_ble.js",
+    "hook": "node claude_light_hook.js"
+  },
+  "dependencies": {
+    "@abandonware/noble": "^1.9.2"
+  }
+}
