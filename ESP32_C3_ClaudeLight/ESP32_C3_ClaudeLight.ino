@@ -4,15 +4,17 @@
 #include <BLE2902.h>
 
 // =====================================================
-// ESP-32E + ClaudeLight: BLE 蓝牙控制版
+// ESP32 SuperMini + ClaudeLight: BLE 蓝牙控制版
 //
 // 接线方式（共阴模块 G Y R GND）：
 // ESP32 GND   -> 模块 GND
-// ESP32 IO25  -> 220Ω -> 模块 G = 绿灯
-// ESP32 IO26  -> 220Ω -> 模块 Y = 黄灯
-// ESP32 IO27  -> 220Ω -> 模块 R = 红灯
+// ESP32 IO0   -> 220Ω -> 模块 G = 绿灯
+// ESP32 IO1   -> 220Ω -> 模块 Y = 黄灯
+// ESP32 IO2   -> 220Ω -> 模块 R = 红灯
 //
 // 共阴模块：GPIO HIGH = 灯亮，GPIO LOW = 灯灭。
+// 注意：GPIO0/GPIO2 为 strapping pin，启动瞬间需确保不受外部强拉。
+//       使用 USB CDC On Boot 模式时 GPIO1 可作为普通 IO 使用。
 // 默认开机模式：demo
 // =====================================================
 
@@ -21,9 +23,9 @@ const char* BLE_DEVICE_NAME = "ClaudeLight";
 #define SERVICE_UUID        "b8b7e001-7a6b-4f4f-9a8b-11c0ffee0001"
 #define MODE_CHAR_UUID      "b8b7e002-7a6b-4f4f-9a8b-11c0ffee0001"
 
-const int GREEN_PIN = 25;
-const int YELLOW_PIN = 26;
-const int RED_PIN = 27;
+const int GREEN_PIN = 0;
+const int YELLOW_PIN = 1;
+const int RED_PIN = 2;
 
 const int PWM_FREQ = 5000;
 const int PWM_RESOLUTION = 8;
