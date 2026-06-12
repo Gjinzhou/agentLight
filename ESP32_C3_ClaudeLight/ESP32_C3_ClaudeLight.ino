@@ -2,26 +2,52 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include <Preferences.h>
+#include <ArduinoJson.h>
 
 // =====================================================
-// ESP32 SuperMini + ClaudeLight: BLE 蓝牙控制版
+// ESP-32E + ClaudeLight: BLE 蓝牙控制版（支持持久化设置）
 //
 // 接线方式（共阴模块 G Y R GND）：
 // ESP32 GND   -> 模块 GND
-// ESP32 IO0   -> 220Ω -> 模块 G = 绿灯
-// ESP32 IO1   -> 220Ω -> 模块 Y = 黄灯
-// ESP32 IO2   -> 220Ω -> 模块 R = 红灯
+// ESP32 IO25  -> 220Ω -> 模块 G = 绿灯
+// ESP32 IO26  -> 220Ω -> 模块 Y = 黄灯
+// ESP32 IO27  -> 220Ω -> 模块 R = 红灯
 //
 // 共阴模块：GPIO HIGH = 灯亮，GPIO LOW = 灯灭。
-// 注意：GPIO0/GPIO2 为 strapping pin，启动瞬间需确保不受外部强拉。
-//       使用 USB CDC On Boot 模式时 GPIO1 可作为普通 IO 使用。
 // 默认开机模式：demo
+//
+// BLE Setting Characteristic 读写格式（JSON）：
+// {
+//   "redMax": 255,
+//   "yellowMax": 220,
+//   "greenMax": 220,
+//   "defaultMode": "demo",
+//   "timeoutMode": "traffic",
+//   "normalTimeout": 5,
+//   "trafficTimeout": 10,
+//   "bleName": "ClaudeLight"
+// }
+// BLE Reset Characteristic：写入任意内容即恢复出厂并重启。
 // =====================================================
-
-const char* BLE_DEVICE_NAME = "ClaudeLight";
 
 #define SERVICE_UUID        "b8b7e001-7a6b-4f4f-9a8b-11c0ffee0001"
 #define MODE_CHAR_UUID      "b8b7e002-7a6b-4f4f-9a8b-11c0ffee0001"
+#define SETTING_CHAR_UUID   "b8b7e003-7a6b-4f4f-9a8b-11c0ffee0001"
+#define RESET_CHAR_UUID     "b8b7e004-7a6b-4f4f-9a8b-11c0ffee0001"
+
+// NVS 存储命名空间
+#define NVS_NAMESPACE       "cl_cfg"
+
+// 默认值常量（用于首次启动和出厂重置）
+#define DEFAULT_BLE_NAME        "ClaudeLight"
+#define DEFAULT_RED_MAX         255
+#define DEFAULT_YELLOW_MAX      220
+#define DEFAULT_GREEN_MAX       220
+#define DEFAULT_MODE            "demo"
+#define DEFAULT_TIMEOUT_MODE    "traffic"
+#define DEFAULT_NORMAL_TIMEOUT  5
+#define DEFAULT_TRAFFIC_TIMEOUT 10
 
 const int GREEN_PIN = 0;
 const int YELLOW_PIN = 1;
@@ -30,19 +56,144 @@ const int RED_PIN = 2;
 const int PWM_FREQ = 5000;
 const int PWM_RESOLUTION = 8;
 
-const int RED_MAX = 255;
-const int YELLOW_MAX = 220;
-const int GREEN_MAX = 220;
+// =====================================================
+// 运行时配置（从 NVS 加载，可通过 BLE 修改）
+// =====================================================
 
-const unsigned long NORMAL_MODE_TIMEOUT_MS = 5UL * 60UL * 1000UL;
-const unsigned long TRAFFIC_MODE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
+int RED_MAX   = DEFAULT_RED_MAX;
+int YELLOW_MAX = DEFAULT_YELLOW_MAX;
+int GREEN_MAX  = DEFAULT_GREEN_MAX;
+
+String cfgDefaultMode   = DEFAULT_MODE;
+String cfgTimeoutMode   = DEFAULT_TIMEOUT_MODE;
+unsigned long NORMAL_MODE_TIMEOUT_MS  = DEFAULT_NORMAL_TIMEOUT  * 60UL * 1000UL;
+unsigned long TRAFFIC_MODE_TIMEOUT_MS = DEFAULT_TRAFFIC_TIMEOUT * 60UL * 1000UL;
+String cfgBleName = DEFAULT_BLE_NAME;
 
 String currentMode = "demo";
 unsigned long modeStart = 0;
 
+Preferences preferences;
 BLEServer* pServer = nullptr;
 BLECharacteristic* pModeCharacteristic = nullptr;
+BLECharacteristic* pSettingCharacteristic = nullptr;
+BLECharacteristic* pResetCharacteristic = nullptr;
 bool deviceConnected = false;
+
+// =====================================================
+// NVS 持久化配置
+// =====================================================
+
+void loadSettings() {
+  preferences.begin(NVS_NAMESPACE, true);  // 只读模式打开
+
+  RED_MAX    = preferences.getInt("redMax",    DEFAULT_RED_MAX);
+  YELLOW_MAX = preferences.getInt("yellowMax", DEFAULT_YELLOW_MAX);
+  GREEN_MAX  = preferences.getInt("greenMax",  DEFAULT_GREEN_MAX);
+
+  cfgDefaultMode  = preferences.getString("defaultMode",  DEFAULT_MODE);
+  cfgTimeoutMode  = preferences.getString("timeoutMode",  DEFAULT_TIMEOUT_MODE);
+  cfgBleName      = preferences.getString("bleName",      DEFAULT_BLE_NAME);
+
+  int normalMin  = preferences.getInt("normalTimeout",  DEFAULT_NORMAL_TIMEOUT);
+  int trafficMin = preferences.getInt("trafficTimeout", DEFAULT_TRAFFIC_TIMEOUT);
+
+  preferences.end();
+
+  NORMAL_MODE_TIMEOUT_MS  = (unsigned long)normalMin  * 60UL * 1000UL;
+  TRAFFIC_MODE_TIMEOUT_MS = (unsigned long)trafficMin * 60UL * 1000UL;
+
+  Serial.println("Settings loaded from NVS.");
+}
+
+void saveSettings() {
+  preferences.begin(NVS_NAMESPACE, false);  // 读写模式打开
+
+  preferences.putInt("redMax",         RED_MAX);
+  preferences.putInt("yellowMax",      YELLOW_MAX);
+  preferences.putInt("greenMax",       GREEN_MAX);
+  preferences.putString("defaultMode", cfgDefaultMode);
+  preferences.putString("timeoutMode", cfgTimeoutMode);
+  preferences.putString("bleName",     cfgBleName);
+  preferences.putInt("normalTimeout",  (int)(NORMAL_MODE_TIMEOUT_MS  / 60000UL));
+  preferences.putInt("trafficTimeout", (int)(TRAFFIC_MODE_TIMEOUT_MS / 60000UL));
+
+  preferences.end();
+
+  Serial.println("Settings saved to NVS.");
+}
+
+void resetSettings() {
+  preferences.begin(NVS_NAMESPACE, false);
+  preferences.clear();
+  preferences.end();
+
+  Serial.println("Settings cleared. Restarting...");
+  delay(200);
+  ESP.restart();
+}
+
+// 将当前配置序列化为 JSON 字符串
+String buildSettingsJson() {
+  StaticJsonDocument<256> doc;
+
+  doc["redMax"]          = RED_MAX;
+  doc["yellowMax"]       = YELLOW_MAX;
+  doc["greenMax"]        = GREEN_MAX;
+  doc["defaultMode"]     = cfgDefaultMode;
+  doc["timeoutMode"]     = cfgTimeoutMode;
+  doc["normalTimeout"]   = (int)(NORMAL_MODE_TIMEOUT_MS  / 60000UL);
+  doc["trafficTimeout"]  = (int)(TRAFFIC_MODE_TIMEOUT_MS / 60000UL);
+  doc["bleName"]         = cfgBleName;
+
+  String output;
+  serializeJson(doc, output);
+  return output;
+}
+
+// 解析并应用 JSON 设置，返回是否有效
+bool applySettingsJson(const String& json) {
+  StaticJsonDocument<256> doc;
+
+  if (deserializeJson(doc, json)) {
+    Serial.println("JSON parse error.");
+    return false;
+  }
+
+  // 各字段均为可选，不存在时保留原值
+  if (doc.containsKey("redMax")) {
+    int val = constrain((int)doc["redMax"], 0, 255);
+    RED_MAX = val;
+  }
+  if (doc.containsKey("yellowMax")) {
+    YELLOW_MAX = constrain((int)doc["yellowMax"], 0, 255);
+  }
+  if (doc.containsKey("greenMax")) {
+    GREEN_MAX = constrain((int)doc["greenMax"], 0, 255);
+  }
+  if (doc.containsKey("defaultMode")) {
+    String val = doc["defaultMode"].as<String>();
+    if (isValidMode(val)) cfgDefaultMode = val;
+  }
+  if (doc.containsKey("timeoutMode")) {
+    String val = doc["timeoutMode"].as<String>();
+    if (isValidMode(val)) cfgTimeoutMode = val;
+  }
+  if (doc.containsKey("normalTimeout")) {
+    int val = (int)doc["normalTimeout"];
+    if (val > 0 && val <= 120) NORMAL_MODE_TIMEOUT_MS = (unsigned long)val * 60UL * 1000UL;
+  }
+  if (doc.containsKey("trafficTimeout")) {
+    int val = (int)doc["trafficTimeout"];
+    if (val > 0 && val <= 120) TRAFFIC_MODE_TIMEOUT_MS = (unsigned long)val * 60UL * 1000UL;
+  }
+  if (doc.containsKey("bleName")) {
+    String val = doc["bleName"].as<String>();
+    if (val.length() > 0 && val.length() <= 20) cfgBleName = val;
+  }
+
+  return true;
+}
 
 // =====================================================
 // 基础工具函数
@@ -362,7 +513,7 @@ class ModeCharacteristicCallbacks : public BLECharacteristicCallbacks {
     String value = pCharacteristic->getValue();
     value.trim();
 
-    Serial.print("BLE write: ");
+    Serial.print("BLE write (mode): ");
     Serial.println(value);
 
     setMode(value);
@@ -370,6 +521,39 @@ class ModeCharacteristicCallbacks : public BLECharacteristicCallbacks {
 
   void onRead(BLECharacteristic* pCharacteristic) {
     pCharacteristic->setValue(currentMode.c_str());
+  }
+};
+
+class SettingCharacteristicCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* pCharacteristic) {
+    String value = pCharacteristic->getValue();
+    value.trim();
+
+    Serial.print("BLE write (setting): ");
+    Serial.println(value);
+
+    if (applySettingsJson(value)) {
+      saveSettings();
+      Serial.println("Settings applied and saved.");
+
+      // 用更新后的配置刷新 Characteristic 内容，方便客户端读回确认
+      String responseJson = buildSettingsJson();
+      pCharacteristic->setValue(responseJson.c_str());
+    } else {
+      Serial.println("Invalid setting JSON, ignored.");
+    }
+  }
+
+  void onRead(BLECharacteristic* pCharacteristic) {
+    String json = buildSettingsJson();
+    pCharacteristic->setValue(json.c_str());
+  }
+};
+
+class ResetCharacteristicCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* pCharacteristic) {
+    Serial.println("BLE write (reset): factory reset triggered.");
+    resetSettings();  // 清空 NVS 并重启
   }
 };
 
@@ -381,43 +565,64 @@ void setup() {
   Serial.begin(115200);
   delay(500);
 
+  // 从 NVS 加载持久化配置（必须在 BLE 初始化前完成，以获取 bleName）
+  loadSettings();
+
   ledcAttach(RED_PIN, PWM_FREQ, PWM_RESOLUTION);
   ledcAttach(YELLOW_PIN, PWM_FREQ, PWM_RESOLUTION);
   ledcAttach(GREEN_PIN, PWM_FREQ, PWM_RESOLUTION);
 
   allOff();
 
-  currentMode = "demo";
+  currentMode = cfgDefaultMode;
   modeStart = millis();
 
   Serial.println();
-  Serial.println("Power on. Default mode: demo");
-  Serial.println("ClaudeLight - BLE enhanced version.");
+  Serial.print("Power on. Default mode: ");
+  Serial.println(currentMode);
+  Serial.println("ClaudeLight - BLE enhanced version with persistent settings.");
   Serial.print("BLE device name: ");
-  Serial.println(BLE_DEVICE_NAME);
+  Serial.println(cfgBleName);
 
-  BLEDevice::init(BLE_DEVICE_NAME);
+  BLEDevice::init(cfgBleName.c_str());
 
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new ServerCallbacks());
 
-  BLEService* pService = pServer->createService(SERVICE_UUID);
+  // numHandles 默认 15，3 个 Characteristic（含 NOTIFY descriptor）需要更多 handle，扩容到 20
+  BLEService* pService = pServer->createService(BLEUUID(String(SERVICE_UUID)), 20);
 
+  // Mode Characteristic（原有）
   pModeCharacteristic = pService->createCharacteristic(
-    MODE_CHAR_UUID,
+    BLEUUID(String(MODE_CHAR_UUID)),
     BLECharacteristic::PROPERTY_READ |
     BLECharacteristic::PROPERTY_WRITE |
     BLECharacteristic::PROPERTY_NOTIFY
   );
-
   pModeCharacteristic->setCallbacks(new ModeCharacteristicCallbacks());
   pModeCharacteristic->setValue(currentMode.c_str());
   pModeCharacteristic->addDescriptor(new BLE2902());
 
+  // Setting Characteristic（新增：读写 JSON 配置）
+  pSettingCharacteristic = pService->createCharacteristic(
+    BLEUUID(String(SETTING_CHAR_UUID)),
+    BLECharacteristic::PROPERTY_READ |
+    BLECharacteristic::PROPERTY_WRITE
+  );
+  pSettingCharacteristic->setCallbacks(new SettingCharacteristicCallbacks());
+  pSettingCharacteristic->setValue(buildSettingsJson().c_str());
+
+  // Reset Characteristic（新增：写入任意值触发出厂重置）
+  pResetCharacteristic = pService->createCharacteristic(
+    BLEUUID(String(RESET_CHAR_UUID)),
+    BLECharacteristic::PROPERTY_WRITE
+  );
+  pResetCharacteristic->setCallbacks(new ResetCharacteristicCallbacks());
+
   pService->start();
 
   BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->addServiceUUID(BLEUUID(String(SERVICE_UUID)));
   pAdvertising->setScanResponse(true);
   pAdvertising->setMinPreferred(0x06);
   pAdvertising->setMinPreferred(0x12);
@@ -425,8 +630,11 @@ void setup() {
   BLEDevice::startAdvertising();
 
   Serial.println("BLE advertising started.");
-  Serial.println("Supported modes:");
-  Serial.println("demo / thinking / ai / busy / success / error / alarm / traffic / off / red / yellow / green");
+  Serial.println("Supported modes: demo / thinking / ai / busy / success / error / alarm / traffic / off / red / yellow / green");
+  Serial.println("BLE Characteristics:");
+  Serial.println("  MODE_CHAR    : read/write/notify current mode");
+  Serial.println("  SETTING_CHAR : read/write JSON config (persistent)");
+  Serial.println("  RESET_CHAR   : write anything to factory reset & reboot");
 }
 
 // =====================================================
