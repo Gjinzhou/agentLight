@@ -16,7 +16,7 @@
 // 内腔尺寸 (盒内)
 INNER_L = 48;    // 内腔长度 (mm)
 INNER_W = 36;    // 内腔宽度 (mm), USB 开口所在侧
-INNER_H = 23;    // 内腔高度 (mm)
+INNER_H = 17.5;    // 内腔高度 (mm)
 
 // 壁厚
 WALL = 1.5;      // 壁厚 (mm)
@@ -35,6 +35,14 @@ LIP_D = 0.8;     // 阴角深度, 内壁后退量 (mm)
 
 // 盖子
 LID_T = 1.5;     // 盖板厚度 (mm)
+
+// 盖子突起文字
+MARK_TEXT1  = "DesignBy";     // 第一行文字
+MARK_TEXT2  = "Jinzhou";      // 第二行文字
+MARK_SIZE   = 5;              // 字号 (mm)
+MARK_DEPTH  = 0.8;            // 突起高度 (mm)
+MARK_MARGIN = 3;              // 角落边距 (mm)
+MARK_GAP    = 1;              // 行间距 (mm)
 
 // 盖子开缝 (从盒内测量)
 SLOT_X1 = 26;    // 缝隙 X 起始 (mm)
@@ -75,7 +83,7 @@ $fn = 32;
 
 // ============== 渲染控制 ==============
 // "box" = 仅主体, "lid" = 仅盖子, "all" = 装配, "exploded" = 分解
-PART = "box";
+PART = "all";
 
 // =====================================================
 // 公共: 圆角矩形
@@ -140,6 +148,14 @@ module lid() {
       // 凸舌 (插入阴角定位)
       translate([WALL - LIP_D + TOL, WALL - LIP_D + TOL, -TONGUE_H])
         cube([TONGUE_L, TONGUE_W, TONGUE_H]);
+
+      // 突起文字 (左上角)
+      translate([MARK_MARGIN, OUTER_W - MARK_MARGIN, LID_T])
+        linear_extrude(height=MARK_DEPTH)
+          text(MARK_TEXT1, size=MARK_SIZE, halign="left", valign="top");
+      translate([MARK_MARGIN, OUTER_W - MARK_MARGIN - MARK_SIZE - MARK_GAP, LID_T])
+        linear_extrude(height=MARK_DEPTH)
+          text(MARK_TEXT2, size=MARK_SIZE, halign="left", valign="top");
     }
 
     // 开缝 (贯穿盖板 + 凸舌)
