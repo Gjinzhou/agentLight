@@ -30,3 +30,4 @@ Thumbs.db
 # BLE logs
 claude_light_ble.log
 node_modules
+build_out_test

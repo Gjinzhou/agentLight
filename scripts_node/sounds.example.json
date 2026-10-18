@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "sounds": [
+    { "id": "coin", "name": "Coin", "notes": [[1319, 60], [1976, 420]] },
+    { "id": "success", "name": "Task Done", "notes": [[784, 90], [988, 90], [1319, 200]] },
+    { "id": "alert", "name": "Need Input", "notes": [[880, 80], [0, 40], [880, 80], [0, 40], [880, 120]] },
+    { "id": "error", "name": "Oops", "notes": [[392, 160], [330, 160], [262, 300]] }
+  ]
+}

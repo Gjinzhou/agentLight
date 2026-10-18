@@ -25,26 +25,27 @@ const MODE_CHAR_UUID = 'b8b7e002-7a6b-4f4f-9a8b-11c0ffee0001';
 const LOG_DIR = path.join(os.homedir(), '.claude', 'claude-light');
 const LOG_FILE = path.join(LOG_DIR, 'claude_light.log');
 
-// 状态映射: Claude Code Hook 事件 -> 灯效模式
+// 状态映射: Claude Code Hook 事件 -> 灯效模式 + 可选音效
+// sound 省略则只亮灯不发声; 机内可用音效 id 见 `node claude_light_sound.js sounds list`
 const EVENT_MODE_MAP = {
-  // Agent 开始工作 - 黄灯慢闪
-  PreToolUse: 'busy',
-  // Agent 完成工具调用 - 绿灯常亮
-  PostToolUse: 'success',
-  // 需要用户确认权限 - 红灯快闪
-  Notification: 'alarm',
-  // Agent 停止工作 - 绿灯常亮
-  Stop: 'success',
-  // 子 Agent 停止 - 绿灯常亮
-  SubagentStop: 'success',
+  // Agent 开始工作 - 黄灯慢闪, 静音(避免高频噪声)
+  PreToolUse: { mode: 'busy' },
+  // Agent 完成工具调用 - 绿灯 + 吃金币
+  PostToolUse: { mode: 'success', sound: 'coin' },
+  // 需要用户确认权限 - 红灯快闪 + 顶砖提示
+  Notification: { mode: 'alarm', sound: 'bump' },
+  // Agent 停止工作 - 绿灯 + 1-Up 完成音
+  Stop: { mode: 'success', sound: 'oneup' },
+  // 子 Agent 停止 - 绿灯, 静音
+  SubagentStop: { mode: 'success' },
 };
 
 // 特殊通知类型映射
 const NOTIFICATION_MODE_MAP = {
-  permission: 'alarm',   // 需要权限确认
-  error: 'error',        // 错误
-  warning: 'yellow',     // 警告
-  info: 'thinking',      // 信息
+  permission: { mode: 'alarm', sound: 'bump' },  // 需要权限确认
+  error: { mode: 'error', sound: 'gameover' },   // 错误
+  warning: { mode: 'yellow', sound: 'bump' },     // 警告
+  info: { mode: 'thinking' },                     // 信息(静音)
 };
 
 // 防抖配置
@@ -197,18 +198,27 @@ function shouldProcessEvent(eventType) {
   return true;
 }
 
+// 将 {mode, sound} 组装为 URL 风格标志: 有 sound 则 mode?sound=xxx, 否则纯 mode
+function buildToken(spec) {
+  if (!spec) return null;
+  return spec.sound ? `${spec.mode}?sound=${spec.sound}` : spec.mode;
+}
+
 function determineMode(hookData) {
   const eventType = hookData.event_type || '';
 
+  let spec;
   // 通知事件特殊处理
   if (eventType === 'Notification') {
     const notification = hookData.notification || {};
     const notifType = notification.type || '';
-    return NOTIFICATION_MODE_MAP[notifType] || 'alarm';
+    spec = NOTIFICATION_MODE_MAP[notifType] || { mode: 'alarm', sound: 'bump' };
+  } else {
+    // 默认映射
+    spec = EVENT_MODE_MAP[eventType] || { mode: 'thinking' };
   }
 
-  // 默认映射
-  return EVENT_MODE_MAP[eventType] || 'thinking';
+  return buildToken(spec);
 }
 
 function readStdin() {

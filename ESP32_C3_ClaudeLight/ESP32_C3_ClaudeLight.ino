@@ -5,6 +5,7 @@
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include "esp_mac.h"
+#include "sound_system.h"
 
 // =====================================================
 // ESP-32E + ClaudeLight: BLE 蓝牙控制版（支持持久化设置）
@@ -36,6 +37,9 @@
 #define MODE_CHAR_UUID "b8b7e002-7a6b-4f4f-9a8b-11c0ffee0001"
 #define SETTING_CHAR_UUID "b8b7e003-7a6b-4f4f-9a8b-11c0ffee0001"
 #define RESET_CHAR_UUID "b8b7e004-7a6b-4f4f-9a8b-11c0ffee0001"
+#define SOUND_CHAR_UUID "b8b7e005-7a6b-4f4f-9a8b-11c0ffee0001"
+#define UPLOAD_CHAR_UUID "b8b7e006-7a6b-4f4f-9a8b-11c0ffee0001"
+#define STORAGE_CHAR_UUID "b8b7e007-7a6b-4f4f-9a8b-11c0ffee0001"
 
 // NVS 存储命名空间
 #define NVS_NAMESPACE "cl_cfg"
@@ -56,6 +60,8 @@
 #define DEFAULT_TIMEOUT_MODE "traffic"
 #define DEFAULT_NORMAL_TIMEOUT 5
 #define DEFAULT_TRAFFIC_TIMEOUT 10
+#define DEFAULT_BUZZER_MAX 50
+#define DEFAULT_SOUND_ENABLED true
 
 const int GREEN_PIN = 0;
 const int YELLOW_PIN = 1;
@@ -78,6 +84,11 @@ unsigned long NORMAL_MODE_TIMEOUT_MS = DEFAULT_NORMAL_TIMEOUT * 60UL * 1000UL;
 unsigned long TRAFFIC_MODE_TIMEOUT_MS = DEFAULT_TRAFFIC_TIMEOUT * 60UL * 1000UL;
 String cfgBleName = DEFAULT_BLE_NAME;
 
+// 蜂鸣器音量上限（0..100，与灯组 xxxMax 亮度机制对齐）
+int BUZZER_MAX = DEFAULT_BUZZER_MAX;
+// 音效总开关
+bool cfgSoundEnabled = DEFAULT_SOUND_ENABLED;
+
 // 标记 NVS 中是否已存在用户设置过的 bleName（用于判定首次启动）
 bool bleNamePersisted = false;
 
@@ -89,6 +100,9 @@ BLEServer *pServer = nullptr;
 BLECharacteristic *pModeCharacteristic = nullptr;
 BLECharacteristic *pSettingCharacteristic = nullptr;
 BLECharacteristic *pResetCharacteristic = nullptr;
+BLECharacteristic *pSoundCharacteristic = nullptr;
+BLECharacteristic *pUploadCharacteristic = nullptr;
+BLECharacteristic *pStorageCharacteristic = nullptr;
 bool deviceConnected = false;
 
 // =====================================================
@@ -106,6 +120,8 @@ void loadSettings()
   cfgDefaultMode = preferences.getString("defaultMode", DEFAULT_MODE);
   cfgTimeoutMode = preferences.getString("timeoutMode", DEFAULT_TIMEOUT_MODE);
   cfgBleName = preferences.getString("bleName", DEFAULT_BLE_NAME);
+  BUZZER_MAX = preferences.getInt("buzzerMax", DEFAULT_BUZZER_MAX);
+  cfgSoundEnabled = preferences.getBool("soundEnabled", DEFAULT_SOUND_ENABLED);
 
   // 判断 bleName 是否已被持久化：不存在即视为首次启动
   bleNamePersisted = preferences.isKey("bleName");
@@ -133,6 +149,8 @@ void saveSettings()
   preferences.putString("bleName", cfgBleName);
   preferences.putInt("normalTimeout", (int)(NORMAL_MODE_TIMEOUT_MS / 60000UL));
   preferences.putInt("trafficTimeout", (int)(TRAFFIC_MODE_TIMEOUT_MS / 60000UL));
+  preferences.putInt("buzzerMax", BUZZER_MAX);
+  preferences.putBool("soundEnabled", cfgSoundEnabled);
   preferences.putString(NVS_BUILD_KEY, String(FW_BUILD_TAG));
 
   preferences.end();
@@ -210,6 +228,8 @@ String buildSettingsJson()
   doc["normalTimeout"] = (int)(NORMAL_MODE_TIMEOUT_MS / 60000UL);
   doc["trafficTimeout"] = (int)(TRAFFIC_MODE_TIMEOUT_MS / 60000UL);
   doc["bleName"] = cfgBleName;
+  doc["buzzerMax"] = BUZZER_MAX;
+  doc["soundEnabled"] = cfgSoundEnabled;
 
   String output;
   serializeJson(doc, output);
@@ -270,6 +290,14 @@ bool applySettingsJson(const String &json)
     String val = doc["bleName"].as<String>();
     if (val.length() > 0 && val.length() <= 20)
       cfgBleName = val;
+  }
+  if (doc.containsKey("buzzerMax"))
+  {
+    BUZZER_MAX = constrain((int)doc["buzzerMax"], 0, 100);
+  }
+  if (doc.containsKey("soundEnabled"))
+  {
+    cfgSoundEnabled = (bool)doc["soundEnabled"];
   }
 
   return true;
@@ -390,8 +418,48 @@ void notifyMode()
   }
 }
 
-void setMode(String mode)
+// 解析 URL 风格标志：mode?sound=xxx&k=v...
+// 返回基础模式名，soundId 通过引用带出（无则为空串）
+String parseModeToken(const String &raw, String &soundId)
 {
+  soundId = "";
+  int q = raw.indexOf('?');
+  if (q < 0)
+  {
+    return raw;
+  }
+
+  String base = raw.substring(0, q);
+  String query = raw.substring(q + 1);
+
+  int start = 0;
+  while (true)
+  {
+    int amp = query.indexOf('&', start);
+    String pair = (amp < 0) ? query.substring(start) : query.substring(start, amp);
+    int eq = pair.indexOf('=');
+    if (eq > 0)
+    {
+      String k = pair.substring(0, eq);
+      String v = pair.substring(eq + 1);
+      k.toLowerCase();
+      v.toLowerCase();
+      if (k == "sound")
+        soundId = v;
+      // 其余键忽略，前向兼容未来参数（如 vol / loop）
+    }
+    if (amp < 0)
+      break;
+    start = amp + 1;
+  }
+
+  return base;
+}
+
+void setMode(String modeRaw)
+{
+  String soundId;
+  String mode = parseModeToken(modeRaw, soundId);
   mode.trim();
   mode.toLowerCase();
 
@@ -406,7 +474,13 @@ void setMode(String mode)
   modeStart = millis();
 
   Serial.print("Mode changed to: ");
-  Serial.println(currentMode);
+  Serial.print(currentMode);
+  if (soundId.length())
+  {
+    Serial.print("  sound=");
+    Serial.print(soundId);
+  }
+  Serial.println();
 
   if (mode == "red")
   {
@@ -430,6 +504,12 @@ void setMode(String mode)
   }
 
   notifyMode();
+
+  // 灯声联动：仅当标志显式携带 ?sound= 时播放（无参数即静音）
+  if (soundId.length())
+  {
+    soundStart(soundId.c_str());
+  }
 }
 
 void autoTimeoutCheck()
@@ -713,6 +793,9 @@ class SettingCharacteristicCallbacks : public BLECharacteristicCallbacks
     if (applySettingsJson(value))
     {
       saveSettings();
+      // 热应用音量/静音，无需重编译或重启
+      soundSetEnabled(cfgSoundEnabled);
+      soundSetVolume(BUZZER_MAX);
       Serial.println("Settings applied and saved.");
 
       // 用更新后的配置刷新 Characteristic 内容，方便客户端读回确认
@@ -738,6 +821,142 @@ class ResetCharacteristicCallbacks : public BLECharacteristicCallbacks
   {
     Serial.println("BLE write (reset): factory reset triggered.");
     resetSettings(); // 清空 NVS 并重启
+  }
+};
+
+// SOUND：读=摘要；写 {"op":"list"}=分帧回传完整 JSON，{"op":"play","id"}=试播
+class SoundCharacteristicCallbacks : public BLECharacteristicCallbacks
+{
+  void onRead(BLECharacteristic *pCharacteristic) override
+  {
+    String out;
+    soundSummaryJson(out);
+    pCharacteristic->setValue(out.c_str());
+  }
+
+  void onWrite(BLECharacteristic *pCharacteristic) override
+  {
+    String value = pCharacteristic->getValue();
+    value.trim();
+    Serial.print("BLE write (sound): ");
+    Serial.println(value);
+
+    StaticJsonDocument<256> doc;
+    if (deserializeJson(doc, value))
+    {
+      Serial.println("sound: bad json");
+      return;
+    }
+    String op = doc["op"] | "";
+    if (op == "list")
+    {
+      sendRawJsonAsList();
+    }
+    else if (op == "play")
+    {
+      const char *id = doc["id"];
+      if (id)
+        soundStart(id);
+    }
+  }
+
+  // 二进制分帧：[0x01, seq, total, ...rawJson 切片]，避免转义膨胀
+  void sendRawJsonAsList()
+  {
+    if (!pSoundCharacteristic)
+      return;
+    const String &raw = soundRawJson();
+    const int DATA = 140;
+    int total = (raw.length() + DATA - 1) / DATA;
+    if (total < 1)
+      total = 1;
+    uint8_t buf[3 + 140];
+    for (int i = 0; i < total; i++)
+    {
+      String piece = raw.substring(i * DATA, i * DATA + DATA);
+      int n = piece.length();
+      buf[0] = 0x01;
+      buf[1] = (uint8_t)i;
+      buf[2] = (uint8_t)total;
+      memcpy(buf + 3, piece.c_str(), n);
+      pSoundCharacteristic->setValue(buf, (uint16_t)(n + 3));
+      if (deviceConnected)
+        pSoundCharacteristic->notify();
+      delay(12); // 防止连续 notify 压垮协议栈
+    }
+    Serial.print("sound list sent: chunks=");
+    Serial.println(total);
+  }
+};
+
+// UPLOAD：流式覆盖上传 begin/data/commit
+class UploadCharacteristicCallbacks : public BLECharacteristicCallbacks
+{
+  void onWrite(BLECharacteristic *pCharacteristic) override
+  {
+    String value = pCharacteristic->getValue();
+    value.trim();
+
+    StaticJsonDocument<512> doc;
+    if (deserializeJson(doc, value))
+    {
+      notifyResult(false, "bad json");
+      return;
+    }
+    String op = doc["op"] | "";
+    String err = "";
+    bool ok = false;
+
+    if (op == "begin")
+    {
+      uint32_t size = (uint32_t)(doc["size"] | 0);
+      ok = soundRxBegin(size, err);
+      Serial.print("upload begin: size=");
+      Serial.println(size);
+    }
+    else if (op == "data")
+    {
+      const char *d = doc["data"];
+      ok = soundRxData(d ? String(d) : String(""), err);
+    }
+    else if (op == "commit")
+    {
+      ok = soundRxCommit(err);
+      Serial.print("upload commit: ");
+      Serial.println(ok ? "ok" : "fail");
+    }
+    else
+    {
+      err = "unknown op";
+    }
+
+    notifyResult(ok, err);
+  }
+
+  void notifyResult(bool ok, const String &msg)
+  {
+    if (!pUploadCharacteristic)
+      return;
+    StaticJsonDocument<160> r;
+    r["op"] = "result";
+    r["ok"] = ok;
+    r["msg"] = msg;
+    String out;
+    serializeJson(r, out);
+    pUploadCharacteristic->setValue(out.c_str());
+    if (deviceConnected)
+      pUploadCharacteristic->notify();
+  }
+};
+
+// STORAGE：读=当前存储状态
+class StorageCharacteristicCallbacks : public BLECharacteristicCallbacks
+{
+  void onRead(BLECharacteristic *pCharacteristic) override
+  {
+    String out;
+    soundStorageJson(out);
+    pCharacteristic->setValue(out.c_str());
   }
 };
 
@@ -771,6 +990,11 @@ void setup()
 
   allOff();
 
+  // 音效系统初始化（挂载 buzzer + 载入音效库，无则装默认）
+  soundInit();
+  soundSetEnabled(cfgSoundEnabled);
+  soundSetVolume(BUZZER_MAX);
+
   currentMode = cfgDefaultMode;
   modeStart = millis();
 
@@ -786,8 +1010,8 @@ void setup()
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new ServerCallbacks());
 
-  // numHandles 默认 15，3 个 Characteristic（含 NOTIFY descriptor）需要更多 handle，扩容到 20
-  BLEService *pService = pServer->createService(BLEUUID(String(SERVICE_UUID)), 20);
+  // numHandles 默认 15，现在共 6 个 Characteristic（含 NOTIFY descriptor），扩容到 32
+  BLEService *pService = pServer->createService(BLEUUID(String(SERVICE_UUID)), 32);
 
   // Mode Characteristic（原有）
   pModeCharacteristic = pService->createCharacteristic(
@@ -813,6 +1037,34 @@ void setup()
       BLECharacteristic::PROPERTY_WRITE);
   pResetCharacteristic->setCallbacks(new ResetCharacteristicCallbacks());
 
+  // Sound Characteristic（读摘要 / 写 {op:list|play}，分帧 notify 回传）
+  pSoundCharacteristic = pService->createCharacteristic(
+      BLEUUID(String(SOUND_CHAR_UUID)),
+      BLECharacteristic::PROPERTY_READ |
+          BLECharacteristic::PROPERTY_WRITE |
+          BLECharacteristic::PROPERTY_NOTIFY);
+  pSoundCharacteristic->setCallbacks(new SoundCharacteristicCallbacks());
+  {
+    String summary0;
+    soundSummaryJson(summary0);
+    pSoundCharacteristic->setValue(summary0.c_str());
+  }
+  pSoundCharacteristic->addDescriptor(new BLE2902());
+
+  // Upload Characteristic（流式覆盖音效库 begin/data/commit）
+  pUploadCharacteristic = pService->createCharacteristic(
+      BLEUUID(String(UPLOAD_CHAR_UUID)),
+      BLECharacteristic::PROPERTY_WRITE |
+          BLECharacteristic::PROPERTY_NOTIFY);
+  pUploadCharacteristic->setCallbacks(new UploadCharacteristicCallbacks());
+  pUploadCharacteristic->addDescriptor(new BLE2902());
+
+  // Storage Characteristic（读存储状态）
+  pStorageCharacteristic = pService->createCharacteristic(
+      BLEUUID(String(STORAGE_CHAR_UUID)),
+      BLECharacteristic::PROPERTY_READ);
+  pStorageCharacteristic->setCallbacks(new StorageCharacteristicCallbacks());
+
   pService->start();
 
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
@@ -826,9 +1078,12 @@ void setup()
   Serial.println("BLE advertising started.");
   Serial.println("Supported modes: demo / thinking / ai / busy / success / error / alarm / traffic / off / red / yellow / green");
   Serial.println("BLE Characteristics:");
-  Serial.println("  MODE_CHAR    : read/write/notify current mode");
+  Serial.println("  MODE_CHAR    : read/write/notify current mode (supports ?sound=id)");
   Serial.println("  SETTING_CHAR : read/write JSON config (persistent)");
   Serial.println("  RESET_CHAR   : write anything to factory reset & reboot");
+  Serial.println("  SOUND_CHAR   : read summary / write {op:list|play}");
+  Serial.println("  UPLOAD_CHAR  : write {op:begin|data|commit} to replace sound library");
+  Serial.println("  STORAGE_CHAR : read storage status JSON");
 }
 
 // =====================================================
@@ -838,6 +1093,7 @@ void setup()
 void loop()
 {
   autoTimeoutCheck();
+  soundUpdate();
 
   if (currentMode == "busy")
   {

@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClaudeLight Web 调试台</title>
+<style>
+  :root {
+    --bg: #12151a; --card: #1b2028; --border: #2c333f;
+    --fg: #dfe5ec; --dim: #8a94a3; --accent: #4da3ff;
+    --ok: #3fbf6f; --warn: #e0a83a; --err: #e05c5c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px; background: var(--bg); color: var(--fg);
+    font-family: "Segoe UI", system-ui, sans-serif; font-size: 14px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 10px; color: var(--accent); }
+  .sub { color: var(--dim); margin-bottom: 14px; font-size: 12px; }
+  .banner {
+    background: #3a2a12; border: 1px solid var(--warn);
+    color: #ffd9a0; padding: 10px 14px; border-radius: 8px; margin-bottom: 14px;
+    font-size: 13px; line-height: 1.6;
+  }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 14px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px;
+  }
+  button {
+    background: #2b3442; color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 13px;
+  }
+  button:hover { background: #364152; }
+  button.primary { background: #1f5fa8; border-color: #2a75c8; }
+  button.primary:hover { background: #2a75c8; }
+  button.danger { background: #7a2b2b; border-color: #a03c3c; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  input[type=text], select, textarea {
+    background: #141820; color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 8px; font-size: 13px;
+  }
+  textarea { width: 100%; font-family: Consolas, monospace; font-size: 12px; }
+  input[type=range] { vertical-align: middle; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .hint { color: var(--dim); font-size: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--dim); font-weight: 600; }
+  #log {
+    background: #0d1014; border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px; height: 220px; overflow-y: auto;
+    font-family: Consolas, monospace; font-size: 12px; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-all; margin-top: 14px;
+  }
+  .lg-INFO { color: var(--fg); } .lg-OK { color: var(--ok); }
+  .lg-WARN { color: var(--warn); } .lg-ERR { color: var(--err); }
+  .lg-RX { color: var(--accent); }
+  .badge {
+    display: inline-block; padding: 2px 10px; border-radius: 999px;
+    font-size: 12px; background: #333c4a; color: var(--dim);
+  }
+  .badge.on { background: #174427; color: var(--ok); }
+  progress { width: 100%; height: 8px; margin: 6px 0; }
+  .stat { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); }
+  .stat b { color: var(--fg); font-weight: 600; }
+  #modeNow { font-size: 16px; color: var(--ok); }
+  .foot { color: var(--dim); font-size: 11px; margin-top: 10px; }
+  .hide { display: none !important; }
+  .small { font-size: 12px; }
+  .mb8 { margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<h1>ClaudeLight Web 调试台 <span id="connBadge" class="badge">未连接</span></h1>
+<div class="sub">通过 Web Bluetooth 调试 ESP32-C3 固件全部功能：灯效模式 / 音效 / 设置 / 存储 / 上传 / 恢复出厂</div>
+
+<div id="ctxBanner" class="banner hide">
+  ⚠️ <b>Web Bluetooth 需要安全上下文</b>，直接双击以 file:// 打开无法扫描蓝牙。<br>
+  请在脚本所在目录启动本地服务后，用 <b>Chrome / Edge</b> 打开 <code>http://localhost:8000</code>：<br>
+  <code>python -m http.server 8000</code>　或　<code>npx serve .</code>
+</div>
+
+<div class="row">
+  <button id="btnConnect" class="primary">🔗 连接设备</button>
+  <button id="btnDisconnect" disabled>断开</button>
+  <span id="devInfo" class="hint"></span>
+</div>
+
+<div class="grid">
+
+  <!-- ============ 模式控制 ============ -->
+  <div class="card">
+    <h2>💡 模式控制 (MODE_CHAR)</h2>
+    <div class="row">当前模式: <span id="modeNow">-</span></div>
+    <div class="row">
+      <select id="modeSel"></select>
+      <label class="hint">sound:&nbsp;<input type="text" id="soundId" size="12" placeholder="coin / 留空=静音"></label>
+      <button id="btnMode" class="primary">推送</button>
+      <button id="btnModeRead">读取</button>
+    </div>
+    <div class="row">
+      <input type="text" id="rawToken" size="30" placeholder="原始标志, 如 busy?sound=coin&x=1">
+      <button id="btnRaw">发送原始</button>
+    </div>
+    <div class="hint">规则: 无参数=静音；<code>?sound=id</code> 联动播放；其他参数 <code>&amp;k=v</code> 自动忽略</div>
+  </div>
+
+  <!-- ============ 音效管理 ============ -->
+  <div class="card">
+    <h2>🔊 音效库 (SOUND_CHAR)</h2>
+    <div class="row">
+      <button id="btnSummary" class="primary">读摘要</button>
+      <button id="btnList" class="primary">拉取完整列表</button>
+      <span id="sumInfo" class="hint"></span>
+    </div>
+    <div id="soundTableWrap"><table id="soundTable" class="hide">
+      <thead><tr><th>id</th><th>名称</th><th>音符</th><th>时长</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </div>
+
+  <!-- ============ 设置 ============ -->
+  <div class="card">
+    <h2>⚙️ 设置 (SETTING_CHAR)</h2>
+    <div class="row">
+      <button id="btnCfgRead" class="primary">读取</button>
+      <button id="btnCfgWrite" class="primary">应用 JSON</button>
+    </div>
+    <div class="row">
+      <label class="hint">音量 buzzerMax:&nbsp;<input type="range" id="volRange" min="0" max="100" value="50"><b id="volVal">50</b></label>
+      <button id="btnVol">下发音量</button>
+      <button id="btnMuteOn">开启音效</button>
+      <button id="btnMuteOff">关闭音效</button>
+    </div>
+    <textarea id="cfgBox" rows="6" spellcheck="false" placeholder='{"redMax":255,...}'></textarea>
+  </div>
+
+  <!-- ============ 上传 ============ -->
+  <div class="card">
+    <h2>📤 音效库上传 (UPLOAD_CHAR)</h2>
+    <div class="row">
+      <input type="file" id="filePick" accept=".json" class="small">
+      <button id="btnUpload" class="primary">begin → data×N → commit</button>
+    </div>
+    <progress id="upProg" max="1" value="0" class="hide"></progress>
+    <div id="upStat" class="hint">选择 JSON 文件后点击上传；本地会先做 schema 校验（≤8192 字节）</div>
+    <textarea id="upBox" rows="4" spellcheck="false" placeholder="也可直接粘贴音效 JSON"></textarea>
+  </div>
+
+  <!-- ============ 存储 ============ -->
+  <div class="card">
+    <h2>🗄️ 存储状态 (STORAGE_CHAR)</h2>
+    <div class="row"><button id="btnStorage" class="primary">读取</button></div>
+    <div id="storageBox" class="hint">尚未读取</div>
+  </div>
+
+  <!-- ============ 危险操作 ============ -->
+  <div class="card">
+    <h2>⚠️ 维护 (RESET_CHAR)</h2>
+    <div class="hint mb8">恢复出厂仅清灯效配置区 cl_cfg，音效库 cl_snd 会保留</div>
+    <button id="btnReset" class="danger">恢复出厂并重启</button>
+  </div>
+
+</div>
+
+<div id="log"></div>
+<div class="foot">固件: ClaudeLight BLE v2 (sound) — 服务 b8b7e001… · MODE 0002 / SETTING 0003 / RESET 0004 / SOUND 0005 / UPLOAD 0006 / STORAGE 0007</div>
+
+<script>
+"use strict";
+
+/* ================= 常量 ================= */
+const SERVICE_UUID = "b8b7e001-7a6b-4f4f-9a8b-11c0ffee0001";
+const CH = {
+  mode:    "b8b7e002-7a6b-4f4f-9a8b-11c0ffee0001",
+  setting: "b8b7e003-7a6b-4f4f-9a8b-11c0ffee0001",
+  reset:   "b8b7e004-7a6b-4f4f-9a8b-11c0ffee0001",
+  sound:   "b8b7e005-7a6b-4f4f-9a8b-11c0ffee0001",
+  upload:  "b8b7e006-7a6b-4f4f-9a8b-11c0ffee0001",
+  storage: "b8b7e007-7a6b-4f4f-9a8b-11c0ffee0001",
+};
+const VALID_MODES = ["demo","thinking","ai","busy","success","error","alarm","traffic","off","red","yellow","green"];
+const SND_BUDGET = 8192;   // 与固件一致
+const UP_CHUNK   = 60;     // 每块原始字节（与 Node 脚本一致）
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+/* ================= 状态 ================= */
+let device = null, chars = {}, listWaiter = null;
+
+/* ================= 工具 ================= */
+const $ = (id) => document.getElementById(id);
+function log(level, msg) {
+  const t = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+  const span = document.createElement("div");
+  span.className = "lg-" + level;
+  span.textContent = `${t} [${level}] ${msg}`;
+  $("log").appendChild(span);
+  $("log").scrollTop = $("log").scrollHeight;
+}
+function needConn() {
+  if (!device || !device.gatt.connected) { log("ERR", "请先连接设备"); return false; }
+  return true;
+}
+
+/* ================= 连接 ================= */
+async function connect() {
+  try {
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: "ClaudeLight" }],
+      optionalServices: [SERVICE_UUID],
+    });
+    log("INFO", `连接 ${device.name} (${device.id}) ...`);
+    device.addEventListener("gattserverdisconnected", onDisconnected);
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    for (const k of Object.keys(CH)) chars[k] = await service.getCharacteristic(CH[k]);
+
+    // 订阅通知: MODE / SOUND / UPLOAD
+    await chars.mode.startNotifications();
+    chars.mode.addEventListener("characteristicvaluechanged", e =>
+      $("modeNow").textContent = dec.decode(e.target.value));
+    await chars.sound.startNotifications();
+    chars.sound.addEventListener("characteristicvaluechanged", onSoundNotify);
+    await chars.upload.startNotifications();
+    chars.upload.addEventListener("characteristicvaluechanged", onUploadNotify);
+
+    $("connBadge").textContent = "已连接"; $("connBadge").classList.add("on");
+    $("btnConnect").disabled = true; $("btnDisconnect").disabled = false;
+    $("devInfo").textContent = device.name;
+    log("OK", "连接成功，已订阅 MODE/SOUND/UPLOAD 通知");
+  } catch (e) {
+    log("ERR", "连接失败: " + e.message);
+  }
+}
+function onDisconnected() {
+  $("connBadge").textContent = "未连接"; $("connBadge").classList.remove("on");
+  $("btnConnect").disabled = false; $("btnDisconnect").disabled = true;
+  $("modeNow").textContent = "-";
+  log("WARN", "设备已断开");
+}
+
+/* ================= SOUND notify: 二进制分帧重组 =================
+   帧格式: [0x01, seq, total, ...rawJson 切片] */
+let listBuf = new Map(), listTotal = 0;
+function onSoundNotify(e) {
+  const dv = e.target.value;
+  if (dv.byteLength < 3 || dv.getUint8(0) !== 0x01) {
+    log("RX", "SOUND: " + dec.decode(dv));
+    return;
+  }
+  const seq = dv.getUint8(1), total = dv.getUint8(2);
+  const piece = new Uint8Array(dv.buffer, dv.byteOffset + 3, dv.byteLength - 3);
+  listBuf.set(seq, piece); listTotal = total;
+  if (listBuf.size === total) {
+    const all = new Uint8Array([...Array(total).keys()].reduce((a, i) => a.concat([...listBuf.get(i)]), []));
+    const text = dec.decode(all);
+    listBuf.clear();
+    if (listWaiter) { listWaiter.resolve(text); listWaiter = null; }
+    renderSoundList(text);
+  } else {
+    log("RX", `收到分帧 ${listBuf.size}/${total}`);
+  }
+}
+function renderSoundList(text) {
+  let obj;
+  try { obj = JSON.parse(text); } catch (err) { log("ERR", "列表 JSON 解析失败: " + err.message); return; }
+  log("OK", `音效库: ${obj.sounds.length} 个音效 (${text.length} 字节)`);
+  const tb = $("soundTable").tBodies[0];
+  tb.innerHTML = "";
+  for (const s of obj.sounds) {
+    const ms = s.notes.reduce((a, n) => a + (n[1] || 0), 0);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><b>${s.id}</b></td><td>${s.name || ""}</td><td>${s.notes.length}</td><td>${ms}ms</td>`;
+    const btn = document.createElement("button");
+    btn.textContent = "▶ 播";
+    btn.onclick = () => playSound(s.id);
+    tr.lastElementChild.appendChild(btn);
+    tb.appendChild(tr);
+  }
+  $("soundTable").classList.remove("hide");
+}
+
+/* ================= UPLOAD notify: result ================= */
+let uploadWaiter = null;
+function onUploadNotify(e) {
+  const text = dec.decode(e.target.value);
+  log("RX", "UPLOAD: " + text);
+  let obj = null;
+  try { obj = JSON.parse(text); } catch (_) {}
+  if (uploadWaiter) { const w = uploadWaiter; uploadWaiter = null; w.resolve(obj || text); }
+}
+async function writeReq(obj, timeout = 6000) {
+  const p = new Promise((res, rej) => {
+    uploadWaiter = { resolve: res };
+    setTimeout(() => { if (uploadWaiter) { uploadWaiter = null; rej(new Error(`等待 ${obj.op} 响应超时`)); } }, timeout);
+  });
+  await chars.upload.writeValue(enc.encode(JSON.stringify(obj)));
+  return p;
+}
+
+/* ================= 功能动作 ================= */
+async function playSound(id) {
+  if (!needConn()) return;
+  await chars.sound.writeValue(enc.encode(JSON.stringify({ op: "play", id })));
+  log("INFO", `试播: ${id}`);
+}
+async function sendMode() {
+  if (!needConn()) return;
+  const mode = $("modeSel").value;
+  const snd = $("soundId").value.trim().toLowerCase();
+  const token = snd ? `${mode}?sound=${snd}` : mode;
+  await chars.mode.writeValue(enc.encode(token));
+  log("INFO", "推送标志: " + token);
+}
+async function readCharValue(char) {
+  const dv = await char.readValue();
+  return dec.decode(dv);
+}
+
+/* ================= 上传流程 ================= */
+async function doUpload(text) {
+  if (!needConn()) return;
+  let obj;
+  try { obj = JSON.parse(text); }
+  catch (e) { $("upStat").textContent = "JSON 解析失败: " + e.message; log("ERR", "上传源 JSON 非法"); return; }
+  if (!obj.sounds || !Array.isArray(obj.sounds)) { $("upStat").textContent = "缺少 sounds 数组"; return; }
+  for (const s of obj.sounds) {
+    if (!/^[a-z0-9_]{1,16}$/.test(s.id || "")) { $("upStat").textContent = `非法 id: ${s.id} (仅 a-z0-9_ 且≤16)`; return; }
+    if (!Array.isArray(s.notes) || s.notes.length > 200) { $("upStat").textContent = `音符数非法: ${s.id}`; return; }
+  }
+  const compact = JSON.stringify(obj);
+  if (new Blob([compact]).size > SND_BUDGET) { $("upStat").textContent = `超出预算 ${compact.length}>${SND_BUDGET}`; return; }
+
+  const prog = $("upProg"); prog.classList.remove("hide"); prog.max = Math.ceil(compact.length / UP_CHUNK) + 2; prog.value = 0;
+  try {
+    let r = await writeReq({ op: "begin", size: new Blob([compact]).size });
+    if (!r.ok) throw new Error("begin 失败: " + r.msg);
+    prog.value++; $("upStat").textContent = "begin ok，分块上传中...";
+
+    let idx = 0;
+    for (let pos = 0; pos < compact.length; pos += UP_CHUNK) {
+      r = await writeReq({ op: "data", i: idx, data: compact.slice(pos, pos + UP_CHUNK) });
+      if (!r.ok) throw new Error(`data #${idx} 失败: ${r.msg}`);
+      idx++; prog.value++;
+      $("upStat").textContent = `已上传 ${idx} 块 / ${Math.ceil(compact.length / UP_CHUNK)}`;
+    }
+
+    r = await writeReq({ op: "commit" });
+    prog.value++;
+    if (r.ok) {
+      $("upStat").textContent = `✅ 上传成功: ${idx} 块，${compact.length} 字节已生效`;
+      log("OK", "音效库覆盖成功，重新拉取列表...");
+      await chars.sound.writeValue(enc.encode(JSON.stringify({ op: "list" })));
+    } else {
+      $("upStat").textContent = `❌ commit 失败: ${r.msg}（旧库保持不变）`;
+      log("ERR", "commit 被拒绝: " + r.msg);
+    }
+  } catch (e) {
+    $("upStat").textContent = "❌ " + e.message;
+    log("ERR", "上传中断: " + e.message);
+  }
+}
+
+/* ================= 事件绑定 ================= */
+VALID_MODES.forEach(m => { const o = document.createElement("option"); o.value = o.textContent = m; $("modeSel").appendChild(o); });
+
+$("btnConnect").onclick = () => {
+  if (!navigator.bluetooth) { log("ERR", "当前浏览器不支持 Web Bluetooth，请用 Chrome/Edge"); return; }
+  connect();
+};
+$("btnDisconnect").onclick = () => { if (device && device.gatt.connected) device.gatt.disconnect(); };
+
+$("btnMode").onclick = sendMode;
+$("btnRaw").onclick = async () => {
+  if (!needConn()) return;
+  const t = $("rawToken").value.trim();
+  if (t) { await chars.mode.writeValue(enc.encode(t)); log("INFO", "推送原始标志: " + t); }
+};
+$("btnModeRead").onclick = async () => {
+  if (!needConn()) return;
+  $("modeNow").textContent = (await readCharValue(chars.mode)).trim();
+};
+
+$("btnSummary").onclick = async () => {
+  if (!needConn()) return;
+  const s = await readCharValue(chars.sound);
+  $("sumInfo").textContent = s; log("RX", "摘要: " + s);
+};
+$("btnList").onclick = async () => {
+  if (!needConn()) return;
+  listBuf = new Map();
+  const p = new Promise((res, rej) => {
+    listWaiter = { resolve: res };
+    setTimeout(() => { if (listWaiter) { listWaiter = null; rej(new Error("列表读取超时")); } }, 15000);
+  });
+  await chars.sound.writeValue(enc.encode(JSON.stringify({ op: "list" })));
+  try { renderSoundList(await p); } catch (e) { log("ERR", e.message); }
+};
+
+$("btnCfgRead").onclick = async () => {
+  if (!needConn()) return;
+  const s = await readCharValue(chars.setting);
+  $("cfgBox").value = JSON.stringify(JSON.parse(s), null, 2);
+  try {
+    const o = JSON.parse(s);
+    if (o.buzzerMax != null) { $("volRange").value = o.buzzerMax; $("volVal").textContent = o.buzzerMax; }
+  } catch (_) {}
+  log("RX", "设置: " + s);
+};
+$("btnCfgWrite").onclick = async () => {
+  if (!needConn()) return;
+  try { JSON.parse($("cfgBox").value); } catch (e) { log("ERR", "设置 JSON 非法: " + e.message); return; }
+  await chars.setting.writeValue(enc.encode($("cfgBox").value));
+  log("INFO", "已下发设置 JSON");
+};
+$("volRange").oninput = () => { $("volVal").textContent = $("volRange").value; };
+$("btnVol").onclick = async () => {
+  if (!needConn()) return;
+  await chars.setting.writeValue(enc.encode(JSON.stringify({ buzzerMax: +$("volRange").value })));
+  log("INFO", `音量已设为 ${$("volRange").value}`);
+};
+$("btnMuteOn").onclick  = async () => { if (needConn()) { await chars.setting.writeValue(enc.encode(JSON.stringify({ soundEnabled: true })));  log("INFO", "音效已开启"); } };
+$("btnMuteOff").onclick = async () => { if (needConn()) { await chars.setting.writeValue(enc.encode(JSON.stringify({ soundEnabled: false }))); log("INFO", "音效已关闭"); } };
+
+$("btnUpload").onclick = () => {
+  const text = $("upBox").value.trim();
+  if (text) return doUpload(text);
+  const f = $("filePick").files[0];
+  if (!f) { $("upStat").textContent = "请选择文件或粘贴 JSON"; return; }
+  f.text().then(doUpload);
+};
+
+$("btnStorage").onclick = async () => {
+  if (!needConn()) return;
+  const o = JSON.parse(await readCharValue(chars.storage));
+  $("storageBox").innerHTML = [
+    ["NVS 分区总量", o.partitionTotal + " B"], ["音效区预算", o.budget + " B"],
+    ["已用", o.used + " B"], ["剩余", o.free + " B"],
+    ["分块数", o.chunks], ["音效数量", o.count],
+  ].map(([k, v]) => `<div class="stat"><span>${k}</span><b>${v}</b></div>`).join("");
+  log("RX", "存储: " + JSON.stringify(o));
+};
+
+$("btnReset").onclick = async () => {
+  if (!needConn()) return;
+  if (!confirm("确认恢复出厂？将清空灯效配置并重启设备（音效库保留）")) return;
+  await chars.reset.writeValue(enc.encode("reset"));
+  log("WARN", "已触发恢复出厂，设备即将重启");
+};
+
+/* ================= 环境检测 ================= */
+if (!window.isSecureContext || location.protocol === "file:") $("ctxBanner").classList.remove("hide");
+if (!navigator.bluetooth) log("WARN", "此浏览器无 Web Bluetooth（需 Chrome/Edge）");
+</script>
+</body>
+</html>
